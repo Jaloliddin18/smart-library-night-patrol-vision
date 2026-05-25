@@ -4,7 +4,7 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 DEFAULT_SOURCE = "videos/id_card/IMG_1640.MOV"
 DEFAULT_MODEL_PATH = "runs/detect/train-v2/weights/best.pt"
@@ -18,6 +18,10 @@ DEFAULT_COCO_SAVE_CONF_THRESHOLD = 0.6
 DEFAULT_COCO_MIN_FRAMES = 3
 DEFAULT_COOLDOWN_SECONDS = 30
 DEFAULT_OUTPUT_DIR = "detections"
+DEFAULT_MQTT_HOST = "localhost"
+DEFAULT_MQTT_PORT = 1883
+DEFAULT_MQTT_TOPIC = "robot/robot_01/lost-item"
+DEFAULT_ROBOT_ID = "robot_01"
 EDGE_MARGIN_RATIO = 0.05
 SUPPORTED_COCO_CLASSES = {"bottle"}
 
@@ -125,6 +129,42 @@ def parse_args():
         default=DEFAULT_COCO_MIN_FRAMES,
         help="Minimum consecutive frames required before saving a COCO event.",
     )
+    parser.add_argument(
+        "--mqtt",
+        action="store_true",
+        help="Enable MQTT publishing for locally saved LOST_ITEM_DETECTED events.",
+    )
+    parser.add_argument(
+        "--mqtt-host",
+        default=DEFAULT_MQTT_HOST,
+        help="MQTT broker host.",
+    )
+    parser.add_argument(
+        "--mqtt-port",
+        type=int,
+        default=DEFAULT_MQTT_PORT,
+        help="MQTT broker port.",
+    )
+    parser.add_argument(
+        "--mqtt-topic",
+        default=DEFAULT_MQTT_TOPIC,
+        help="MQTT topic for LOST_ITEM_DETECTED events.",
+    )
+    parser.add_argument(
+        "--robot-id",
+        default=DEFAULT_ROBOT_ID,
+        help="Robot identifier included in MQTT payloads.",
+    )
+    parser.add_argument(
+        "--mqtt-username",
+        default=None,
+        help="Optional MQTT username.",
+    )
+    parser.add_argument(
+        "--mqtt-password",
+        default=None,
+        help="Optional MQTT password.",
+    )
     return parser.parse_args()
 
 
@@ -185,6 +225,71 @@ def create_detection_record(object_type, confidence, snapshot_path, source_name)
         "status": "PENDING_REVIEW",
         "notes": event_meta["notes"]
     }
+
+
+def init_mqtt_client(args) -> Tuple[Optional[Any], bool]:
+    if not args.mqtt:
+        return None, False
+
+    try:
+        import paho.mqtt.client as mqtt
+    except ImportError:
+        print(
+            "WARNING: MQTT enabled but paho-mqtt is not installed. "
+            "MQTT publishing disabled."
+        )
+        print("Install with: .venv/bin/pip install paho-mqtt")
+        return None, False
+
+    client = mqtt.Client()
+    if args.mqtt_username:
+        client.username_pw_set(args.mqtt_username, args.mqtt_password or "")
+
+    try:
+        client.connect(args.mqtt_host, args.mqtt_port, keepalive=60)
+        client.loop_start()
+        return client, True
+    except Exception as exc:
+        print(
+            f"WARNING: MQTT connect failed ({args.mqtt_host}:{args.mqtt_port}) - {exc}. "
+            "Continuing with local logging only."
+        )
+        return None, False
+
+
+def build_mqtt_payload(record: Dict[str, Any], robot_id: str) -> Dict[str, Any]:
+    payload = dict(record)
+    payload["robotId"] = robot_id
+    return payload
+
+
+def publish_mqtt_event(client: Optional[Any], topic: str, payload: Dict[str, Any]) -> None:
+    if client is None:
+        return
+
+    try:
+        publish_info = client.publish(
+            topic=topic,
+            payload=json.dumps(payload, ensure_ascii=False),
+            qos=0,
+            retain=False,
+        )
+        result_code = getattr(publish_info, "rc", 0)
+        if result_code == 0:
+            print(
+                f"MQTT published: topic={topic} "
+                f"object={payload['objectType']} conf={payload['confidence']:.4f}"
+            )
+        else:
+            print(
+                f"WARNING: MQTT publish failed (rc={result_code}) topic={topic}. "
+                "Local logging was still saved."
+            )
+    except Exception as exc:
+        print(
+            f"WARNING: MQTT publish error ({exc}). "
+            "Local logging was still saved."
+        )
 
 
 def touches_frame_edge(x1, y1, x2, y2, frame_width, frame_height, margin_ratio=EDGE_MARGIN_RATIO):
@@ -275,6 +380,8 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
 
+    mqtt_client, mqtt_connected = init_mqtt_client(args)
+
     from ultralytics import YOLO
 
     model = YOLO(selected_model)
@@ -339,6 +446,12 @@ def main():
         print(f"COCO preview confidence (--coco-conf): {coco_conf}")
         print(f"COCO save confidence (--coco-save-conf): {coco_save_conf}")
         print(f"COCO minimum consecutive frames (--coco-min-frames): {coco_min_frames}")
+    print(f"MQTT enabled: {'YES' if mqtt_connected else 'NO'}")
+    if args.mqtt:
+        print(
+            f"MQTT config: host={args.mqtt_host} port={args.mqtt_port} "
+            f"topic={args.mqtt_topic} robotId={args.robot_id}"
+        )
     print(f"Display window: {'ON' if args.show else 'OFF'}")
     if args.show:
         print("Press q to quit.")
@@ -440,6 +553,9 @@ def main():
                             f"snapshot={record['snapshotPath']}"
                         )
 
+                        mqtt_payload = build_mqtt_payload(record, args.robot_id)
+                        publish_mqtt_event(mqtt_client, args.mqtt_topic, mqtt_payload)
+
                 if frame_candidates:
                     candidate_text = ", ".join(sorted(frame_candidates))
                     cv2.putText(
@@ -472,6 +588,12 @@ def main():
             print("Stopped by user (Ctrl+C).")
     finally:
         cap.release()
+        if mqtt_connected and mqtt_client is not None:
+            try:
+                mqtt_client.loop_stop()
+                mqtt_client.disconnect()
+            except Exception as exc:
+                print(f"WARNING: MQTT disconnect error: {exc}")
         if args.show:
             cv2.destroyAllWindows()
 

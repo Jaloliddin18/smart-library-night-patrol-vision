@@ -49,11 +49,13 @@ Completed work:
 - Mac/friend laptop is YOLO inference brain.
 - Raspberry Pi handles movement and color-line navigation only.
 - Raspberry Pi should not run heavy YOLO inference due limited RAM.
-- MQTT will connect vision module, robot controller, backend, and frontend later.
+- MQTT optional publish path from vision module is implemented behind `--mqtt`.
+- Full MQTT integration with robot/controller/backend/frontend flow is still a later step.
 - Backend/admin review is for morning staff collection workflow.
 
 ## 3. Current Next Task
-1. Implement MQTT `LOST_ITEM_DETECTED` publishing from `patrol_id_card_logger.py`.
+1. Install `paho-mqtt` in `.venv` and run live broker/subscriber verification for published events.
+2. Validate optional COCO bottle MQTT publish with a stable bottle source.
 
 ## 4. Known Good Model Path
 - Current preferred model: `runs/detect/train-v2/weights/best.pt`
@@ -87,3 +89,30 @@ python patrol_id_card_logger.py --model runs/detect/train-v2/weights/best.pt --s
 - Do not label the whole floor as `id_card`; keep bounding boxes tight around ID-card-like objects.
 - Edge-touching boxes (within 5% border margin) are preview-only and must not be saved as patrol reports.
 - Do not retrain, delete outputs, or add MQTT/backend integration unless explicitly requested.
+
+## 8. MQTT Integration (2026-05-25)
+- `patrol_id_card_logger.py` now supports optional MQTT publishing for saved `LOST_ITEM_DETECTED` events.
+- Local JSON/snapshot saving remains the primary path and is unchanged.
+- MQTT publish is additional and only triggers after a detection passes save gating and is saved locally.
+- New CLI args:
+  - `--mqtt`
+  - `--mqtt-host` (default `localhost`)
+  - `--mqtt-port` (default `1883`)
+  - `--mqtt-topic` (default `robot/robot_01/lost-item`)
+  - `--robot-id` (default `robot_01`)
+  - `--mqtt-username` (optional)
+  - `--mqtt-password` (optional)
+- MQTT payload uses saved event fields plus `robotId`, for example:
+  - `eventType`, `robotId`, `objectType`, `confidence`, `priority`, `detectedAt`,
+    `snapshotPath`, `location`, `status`, `notes`
+- Dependency status:
+  - `paho-mqtt` is currently missing in `.venv`.
+  - Install command: `.venv/bin/pip install paho-mqtt`
+- Failure behavior:
+  - If MQTT dependency, connect, or publish fails, logger prints a warning and continues local logging.
+  - No per-frame MQTT spam logs were added.
+- Validation run:
+  - `.venv/bin/python -m py_compile patrol_id_card_logger.py` passed.
+  - `.venv/bin/python patrol_id_card_logger.py --help` shows all new MQTT args.
+  - Non-MQTT run still saved local event successfully.
+  - MQTT-enabled run (without `paho-mqtt`) warned once and still saved local event successfully.
