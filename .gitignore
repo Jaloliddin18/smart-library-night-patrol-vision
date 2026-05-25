@@ -20,3 +20,4 @@ ID Card Floor Detection.v1i.yolov8.zip
 
 # Model binaries (use Git LFS or external storage if needed)
 *.pt
+admin_jwt.txt

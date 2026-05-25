@@ -18,12 +18,23 @@ DEFAULT_COCO_SAVE_CONF_THRESHOLD = 0.6
 DEFAULT_COCO_MIN_FRAMES = 3
 DEFAULT_COOLDOWN_SECONDS = 30
 DEFAULT_OUTPUT_DIR = "detections"
+DEFAULT_BACKEND_URL = "http://localhost:3007/graphql"
+DEFAULT_UPLOAD_TIMEOUT_SECONDS = 15
 DEFAULT_MQTT_HOST = "localhost"
 DEFAULT_MQTT_PORT = 1883
 DEFAULT_MQTT_TOPIC = "robot/robot_01/lost-item"
 DEFAULT_ROBOT_ID = "robot_01"
 EDGE_MARGIN_RATIO = 0.05
 SUPPORTED_COCO_CLASSES = {"bottle"}
+INSTALL_HINT = ".venv/bin/pip install requests paho-mqtt"
+UPLOAD_SNAPSHOT_MUTATION = """
+mutation UploadLostItemSnapshot($file: Upload!) {
+  uploadLostItemSnapshot(file: $file) {
+    snapshotPath
+    snapshotUrl
+  }
+}
+"""
 
 OBJECT_EVENT_META = {
     "id_card": {
@@ -130,6 +141,32 @@ def parse_args():
         help="Minimum consecutive frames required before saving a COCO event.",
     )
     parser.add_argument(
+        "--upload-snapshot",
+        action="store_true",
+        help="Enable backend GraphQL upload for each locally saved snapshot.",
+    )
+    parser.add_argument(
+        "--backend-url",
+        default=DEFAULT_BACKEND_URL,
+        help="Backend GraphQL endpoint for snapshot upload.",
+    )
+    parser.add_argument(
+        "--admin-token",
+        default=None,
+        help="Admin JWT token for uploadLostItemSnapshot.",
+    )
+    parser.add_argument(
+        "--admin-token-file",
+        default=None,
+        help="Path to a file containing an admin JWT token.",
+    )
+    parser.add_argument(
+        "--upload-timeout",
+        type=float,
+        default=DEFAULT_UPLOAD_TIMEOUT_SECONDS,
+        help="Snapshot upload timeout in seconds.",
+    )
+    parser.add_argument(
         "--mqtt",
         action="store_true",
         help="Enable MQTT publishing for locally saved LOST_ITEM_DETECTED events.",
@@ -177,9 +214,9 @@ def resolve_source(source):
 
 def source_label(source):
     if isinstance(source, int):
-        return f"camera_{source}"
+        return "camera"
     if str(source).startswith(("http://", "https://", "rtsp://", "rtmp://")):
-        return "stream_source"
+        return "phone_stream"
     return "video_demo"
 
 
@@ -204,17 +241,25 @@ def save_detection_record(record, detections_file):
         json.dump(detections, f, indent=2, ensure_ascii=False)
 
 
-def create_detection_record(object_type, confidence, snapshot_path, source_name):
+def create_detection_record(
+    object_type,
+    confidence,
+    snapshot_path,
+    source_name,
+    robot_id: Optional[str] = None,
+    snapshot_url: Optional[str] = None,
+):
     now = datetime.now()
     event_meta = OBJECT_EVENT_META[object_type]
 
-    return {
+    record = {
         "eventType": "LOST_ITEM_DETECTED",
         "objectType": object_type,
         "confidence": round(float(confidence), 4),
         "priority": event_meta["priority"],
         "detectedAt": now.isoformat(timespec="seconds"),
         "snapshotPath": str(snapshot_path),
+        "snapshotUrl": snapshot_url,
         "location": {
             "source": source_name,
             "floorId": "floor_1",
@@ -224,6 +269,107 @@ def create_detection_record(object_type, confidence, snapshot_path, source_name)
         },
         "status": "PENDING_REVIEW",
         "notes": event_meta["notes"]
+    }
+    if robot_id is not None:
+        record["robotId"] = robot_id
+    return record
+
+
+def resolve_admin_token(admin_token: Optional[str], admin_token_file: Optional[str]) -> Optional[str]:
+    inline_token = (admin_token or "").strip()
+    if inline_token:
+        return inline_token
+
+    if not admin_token_file:
+        return None
+
+    token_path = Path(admin_token_file)
+    try:
+        file_token = token_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError(f"Could not read --admin-token-file '{token_path}': {exc}") from exc
+
+    if not file_token:
+        raise RuntimeError(f"--admin-token-file '{token_path}' is empty.")
+    return file_token
+
+
+def init_requests_module(upload_snapshot_enabled: bool):
+    if not upload_snapshot_enabled:
+        return None
+
+    try:
+        import requests  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "Snapshot upload enabled but requests is not installed.\n"
+            f"Install with: {INSTALL_HINT}"
+        ) from exc
+    return requests
+
+
+def upload_lost_item_snapshot(
+    snapshot_path: Path,
+    backend_url: str,
+    admin_token: str,
+    timeout: float,
+    requests_module: Any,
+) -> Dict[str, Optional[str]]:
+    operations = {
+        "query": UPLOAD_SNAPSHOT_MUTATION,
+        "variables": {"file": None},
+    }
+    file_map = {"0": ["variables.file"]}
+    headers = {
+        "Authorization": f"Bearer {admin_token}",
+        "apollo-require-preflight": "true",
+        "x-apollo-operation-name": "UploadLostItemSnapshot",
+    }
+
+    try:
+        with open(snapshot_path, "rb") as snapshot_file:
+            files = {
+                "0": (snapshot_path.name, snapshot_file, "image/jpeg"),
+            }
+            response = requests_module.post(
+                backend_url,
+                data={
+                    "operations": json.dumps(operations),
+                    "map": json.dumps(file_map),
+                },
+                files=files,
+                headers=headers,
+                timeout=timeout,
+            )
+    except Exception as exc:
+        raise RuntimeError(f"Upload request failed: {exc}") from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Upload returned non-JSON response (status={response.status_code})."
+        ) from exc
+
+    errors = payload.get("errors")
+    if errors:
+        first_error = errors[0]
+        if isinstance(first_error, dict):
+            error_message = first_error.get("message", str(first_error))
+        else:
+            error_message = str(first_error)
+        raise RuntimeError(f"Upload API error: {error_message}")
+
+    if response.status_code >= 400:
+        raise RuntimeError(f"Upload HTTP error: status={response.status_code}")
+
+    upload_result = payload.get("data", {}).get("uploadLostItemSnapshot")
+    if not isinstance(upload_result, dict):
+        raise RuntimeError("Upload response missing data.uploadLostItemSnapshot.")
+
+    return {
+        "snapshotPath": upload_result.get("snapshotPath"),
+        "snapshotUrl": upload_result.get("snapshotUrl"),
     }
 
 
@@ -238,7 +384,7 @@ def init_mqtt_client(args) -> Tuple[Optional[Any], bool]:
             "WARNING: MQTT enabled but paho-mqtt is not installed. "
             "MQTT publishing disabled."
         )
-        print("Install with: .venv/bin/pip install paho-mqtt")
+        print(f"Install with: {INSTALL_HINT}")
         return None, False
 
     client = mqtt.Client()
@@ -364,6 +510,20 @@ def process_candidates_for_object(
 def main():
     args = parse_args()
 
+    upload_timeout = args.upload_timeout
+    if upload_timeout <= 0:
+        raise ValueError("--upload-timeout must be greater than 0.")
+
+    admin_token: Optional[str] = None
+    if args.upload_snapshot:
+        admin_token = resolve_admin_token(args.admin_token, args.admin_token_file)
+        if not admin_token:
+            raise ValueError(
+                "Snapshot upload requires --admin-token or --admin-token-file when "
+                "--upload-snapshot is enabled."
+            )
+
+    requests_module = init_requests_module(args.upload_snapshot)
     selected_source = resolve_source(args.source)
     selected_model = args.model
     preview_conf = args.conf
@@ -446,6 +606,13 @@ def main():
         print(f"COCO preview confidence (--coco-conf): {coco_conf}")
         print(f"COCO save confidence (--coco-save-conf): {coco_save_conf}")
         print(f"COCO minimum consecutive frames (--coco-min-frames): {coco_min_frames}")
+    print(f"Snapshot upload enabled: {'YES' if args.upload_snapshot else 'NO'}")
+    if args.upload_snapshot:
+        token_source = "--admin-token" if args.admin_token else "--admin-token-file"
+        print(
+            f"Upload config: backend={args.backend_url} "
+            f"timeout={upload_timeout}s tokenSource={token_source}"
+        )
     print(f"MQTT enabled: {'YES' if mqtt_connected else 'NO'}")
     if args.mqtt:
         print(
@@ -539,7 +706,34 @@ def main():
                             confidence=state["streak_best_conf"],
                             snapshot_path=snapshot_path,
                             source_name=source_name,
+                            robot_id=args.robot_id,
+                            snapshot_url=None,
                         )
+
+                        if args.upload_snapshot and admin_token is not None:
+                            try:
+                                upload_result = upload_lost_item_snapshot(
+                                    snapshot_path=snapshot_path,
+                                    backend_url=args.backend_url,
+                                    admin_token=admin_token,
+                                    timeout=upload_timeout,
+                                    requests_module=requests_module,
+                                )
+                                uploaded_snapshot_path = upload_result.get("snapshotPath")
+                                record["snapshotUrl"] = (
+                                    upload_result.get("snapshotUrl") or uploaded_snapshot_path
+                                )
+                                if uploaded_snapshot_path:
+                                    record["uploadedSnapshotPath"] = uploaded_snapshot_path
+                                print(
+                                    "Snapshot upload succeeded: "
+                                    f"remotePath={uploaded_snapshot_path or 'n/a'}"
+                                )
+                            except Exception as exc:
+                                print(
+                                    f"WARNING: Snapshot upload failed ({exc}). "
+                                    "Continuing with local logging only."
+                                )
 
                         save_detection_record(record, detections_file)
                         last_saved_at[object_type] = now

@@ -54,8 +54,7 @@ Completed work:
 - Backend/admin review is for morning staff collection workflow.
 
 ## 3. Current Next Task
-1. Install `paho-mqtt` in `.venv` and run live broker/subscriber verification for published events.
-2. Validate optional COCO bottle MQTT publish with a stable bottle source.
+1. Phase 5: build the admin frontend morning-review dashboard for lost item review.
 
 ## 4. Known Good Model Path
 - Current preferred model: `runs/detect/train-v2/weights/best.pt`
@@ -90,29 +89,57 @@ python patrol_id_card_logger.py --model runs/detect/train-v2/weights/best.pt --s
 - Edge-touching boxes (within 5% border margin) are preview-only and must not be saved as patrol reports.
 - Do not retrain, delete outputs, or add MQTT/backend integration unless explicitly requested.
 
-## 8. MQTT Integration (2026-05-25)
-- `patrol_id_card_logger.py` now supports optional MQTT publishing for saved `LOST_ITEM_DETECTED` events.
-- Local JSON/snapshot saving remains the primary path and is unchanged.
-- MQTT publish is additional and only triggers after a detection passes save gating and is saved locally.
-- New CLI args:
+## 8. Phase 4 Integration (2026-05-26)
+- `patrol_id_card_logger.py` now supports:
+  - optional backend snapshot upload
+  - optional MQTT publish
+- Local snapshot + `detections/detections.json` logging remains unchanged as the primary path.
+- Upload CLI args added:
+  - `--upload-snapshot`
+  - `--backend-url`
+  - `--admin-token`
+  - `--admin-token-file`
+  - `--upload-timeout`
+- MQTT CLI args available:
   - `--mqtt`
-  - `--mqtt-host` (default `localhost`)
-  - `--mqtt-port` (default `1883`)
-  - `--mqtt-topic` (default `robot/robot_01/lost-item`)
-  - `--robot-id` (default `robot_01`)
-  - `--mqtt-username` (optional)
-  - `--mqtt-password` (optional)
-- MQTT payload uses saved event fields plus `robotId`, for example:
-  - `eventType`, `robotId`, `objectType`, `confidence`, `priority`, `detectedAt`,
-    `snapshotPath`, `location`, `status`, `notes`
+  - `--mqtt-host`
+  - `--mqtt-port`
+  - `--mqtt-topic`
+  - `--robot-id`
+  - `--mqtt-username`
+  - `--mqtt-password`
 - Dependency status:
-  - `paho-mqtt` is currently missing in `.venv`.
-  - Install command: `.venv/bin/pip install paho-mqtt`
-- Failure behavior:
-  - If MQTT dependency, connect, or publish fails, logger prints a warning and continues local logging.
-  - No per-frame MQTT spam logs were added.
-- Validation run:
-  - `.venv/bin/python -m py_compile patrol_id_card_logger.py` passed.
-  - `.venv/bin/python patrol_id_card_logger.py --help` shows all new MQTT args.
-  - Non-MQTT run still saved local event successfully.
-  - MQTT-enabled run (without `paho-mqtt`) warned once and still saved local event successfully.
+  - `requests` is installed and available.
+  - `paho-mqtt` was missing and was installed in local `.venv`.
+- MQTT-only integration test result:
+  - Python published `LOST_ITEM_DETECTED` to `robot/robot_01/lost-item`.
+  - Backend MQTT listener received the message and saved `LostItem` in MongoDB.
+  - Backend log confirmed: `Lost item saved robotId=robot_01 objectType=ID_CARD`.
+- Upload + MQTT integration:
+  - Initial multipart upload failed due Apollo CSRF/preflight protection.
+  - Fix applied in upload helper headers:
+    - `apollo-require-preflight: true`
+    - `x-apollo-operation-name: UploadLostItemSnapshot`
+  - Full upload + MQTT test then succeeded.
+  - Snapshot upload returned:
+    - `uploads/lost-items/b3ef65f9-8062-413b-a3a4-10ce1d6849a8.jpg`
+  - GraphQL `getLostItems` confirmed newest `LostItem.snapshotUrl` is non-null:
+    - `uploads/lost-items/b3ef65f9-8062-413b-a3a4-10ce1d6849a8.jpg`
+- End-to-end flow now working:
+  1. Detect item
+  2. Save local snapshot
+  3. Upload snapshot to backend
+  4. Publish MQTT event with `snapshotUrl`
+  5. Backend stores `LostItem` record
+  6. Admin GraphQL query can retrieve it
+- Security note:
+  - `admin_jwt.txt` is local-only and must stay git-ignored.
+  - Never commit tokens.
+
+## 9. Completed Phases
+- Phase 1: Backend LostItem model/admin APIs
+- Phase 2: Backend MQTT lost-item ingestion
+- Phase 3: Backend lost-item snapshot upload API
+- Phase 4: Python upload + MQTT publish
+- Next phase:
+  - Phase 5: Admin frontend morning-review dashboard for lost item review.
