@@ -4,14 +4,16 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
-
-from ultralytics import YOLO
+from typing import Any, Optional
 
 DEFAULT_SOURCE = "videos/id_card/IMG_1640.MOV"
-DEFAULT_MODEL_PATH = "runs/detect/train-4/weights/best.pt"
+DEFAULT_MODEL_PATH = "runs/detect/train-v2/weights/best.pt"
 DEFAULT_CONF_THRESHOLD = 0.5
+DEFAULT_SAVE_CONF_THRESHOLD = 0.75
+DEFAULT_MIN_FRAMES = 3
 DEFAULT_COOLDOWN_SECONDS = 30
 DEFAULT_OUTPUT_DIR = "detections"
+EDGE_MARGIN_RATIO = 0.05
 
 
 def parse_args():
@@ -39,6 +41,18 @@ def parse_args():
         type=float,
         default=DEFAULT_COOLDOWN_SECONDS,
         help="Cooldown in seconds between saved detection events.",
+    )
+    parser.add_argument(
+        "--save-conf",
+        type=float,
+        default=DEFAULT_SAVE_CONF_THRESHOLD,
+        help="Minimum confidence required to save a detection event.",
+    )
+    parser.add_argument(
+        "--min-frames",
+        type=int,
+        default=DEFAULT_MIN_FRAMES,
+        help="Minimum consecutive frames required before saving an event.",
     )
     parser.add_argument(
         "--output-dir",
@@ -111,19 +125,35 @@ def create_detection_record(object_type, confidence, snapshot_path, source_name)
     }
 
 
+def touches_frame_edge(x1, y1, x2, y2, frame_width, frame_height, margin_ratio=EDGE_MARGIN_RATIO):
+    margin_x = int(frame_width * margin_ratio)
+    margin_y = int(frame_height * margin_ratio)
+
+    return (
+        x1 <= margin_x
+        or y1 <= margin_y
+        or x2 >= frame_width - margin_x
+        or y2 >= frame_height - margin_y
+    )
+
+
 def main():
     args = parse_args()
 
     selected_source = resolve_source(args.source)
     selected_model = args.model
-    selected_conf = args.conf
+    preview_conf = args.conf
     selected_cooldown = args.cooldown
+    save_conf = args.save_conf
+    min_frames = max(1, args.min_frames)
     output_dir = Path(args.output_dir)
     snapshot_dir = output_dir / "snapshots"
     detections_file = output_dir / "detections.json"
 
     output_dir.mkdir(parents=True, exist_ok=True)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    from ultralytics import YOLO
 
     model = YOLO(selected_model)
     cap = cv2.VideoCapture(selected_source)
@@ -136,7 +166,10 @@ def main():
     print("Night patrol ID-card logger running.")
     print(f"Source: {selected_source}")
     print(f"Model: {selected_model}")
-    print(f"Confidence threshold: {selected_conf}")
+    print(f"Preview confidence threshold (--conf): {preview_conf}")
+    print(f"Save confidence threshold (--save-conf): {save_conf}")
+    print(f"Minimum consecutive frames (--min-frames): {min_frames}")
+    print(f"Edge margin ratio: {EDGE_MARGIN_RATIO:.0%}")
     print(f"Cooldown seconds: {selected_cooldown}")
     print(f"Output directory: {output_dir}")
     print(f"Detections file: {detections_file}")
@@ -144,93 +177,127 @@ def main():
     if args.show:
         print("Press q to quit.")
 
+    streak_count = 0
+    streak_best_conf = 0.0
+    streak_best_frame: Optional[Any] = None
+    streak_saved = False
+
     try:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                print("Video finished.")
-                break
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    print("Video finished.")
+                    break
 
-            results = model.predict(frame, conf=selected_conf, verbose=False)
+                frame_h, frame_w = frame.shape[:2]
+                results = model.predict(frame, conf=preview_conf, verbose=False)
 
-            detected_this_frame = False
+                detected_this_frame = False
+                frame_best_candidate_conf = 0.0
+                frame_best_candidate_frame = None
 
-            for result in results:
-                for box in result.boxes:
-                    cls_id = int(box.cls[0])
-                    cls_name = model.names[cls_id]
-                    confidence = float(box.conf[0])
+                for result in results:
+                    for box in result.boxes:
+                        cls_id = int(box.cls[0])
+                        cls_name = model.names[cls_id]
+                        confidence = float(box.conf[0])
 
-                    if cls_name != "id_card":
-                        continue
+                        if cls_name != "id_card":
+                            continue
 
-                    detected_this_frame = True
+                        detected_this_frame = True
 
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        is_edge = touches_frame_edge(x1, y1, x2, y2, frame_w, frame_h)
 
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 3)
-                    cv2.putText(
-                        frame,
-                        f"id_card {confidence:.2f}",
-                        (x1, max(30, y1 - 10)),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.8,
-                        (255, 0, 0),
-                        2,
-                    )
+                        eligible_for_save = (confidence >= save_conf) and (not is_edge)
+                        box_color = (0, 255, 0) if eligible_for_save else (0, 165, 255)
+                        status_text = "save-ready" if eligible_for_save else "preview-only"
 
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 3)
+                        cv2.putText(
+                            frame,
+                            f"id_card {confidence:.2f} ({status_text})",
+                            (x1, max(30, y1 - 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7,
+                            box_color,
+                            2,
+                        )
+
+                        if eligible_for_save and confidence > frame_best_candidate_conf:
+                            frame_best_candidate_conf = confidence
+                            frame_best_candidate_frame = frame.copy()
+
+                if frame_best_candidate_frame is not None:
+                    streak_count += 1
+                    if frame_best_candidate_conf > streak_best_conf:
+                        streak_best_conf = frame_best_candidate_conf
+                        streak_best_frame = frame_best_candidate_frame
                     now = time.time()
+                    cooldown_ready = now - last_saved_at >= selected_cooldown
 
-                    if now - last_saved_at >= selected_cooldown:
+                    if streak_count >= min_frames and cooldown_ready and not streak_saved:
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         snapshot_path = snapshot_dir / f"id_card_{timestamp}.jpg"
 
-                        cv2.imwrite(str(snapshot_path), frame)
+                        if streak_best_frame is not None:
+                            cv2.imwrite(str(snapshot_path), streak_best_frame)
 
                         record = create_detection_record(
                             object_type="id_card",
-                            confidence=confidence,
+                            confidence=streak_best_conf,
                             snapshot_path=snapshot_path,
                             source_name=source_label(selected_source),
                         )
 
                         save_detection_record(record, detections_file)
                         last_saved_at = now
+                        streak_saved = True
 
                         print(
                             f"Saved detection: object=id_card "
                             f"conf={record['confidence']:.4f} "
+                            f"frames={streak_count} "
                             f"time={record['detectedAt']} "
                             f"snapshot={record['snapshotPath']}"
                         )
+                else:
+                    streak_count = 0
+                    streak_best_conf = 0.0
+                    streak_best_frame = None
+                    streak_saved = False
 
-            if detected_this_frame:
-                cv2.putText(
-                    frame,
-                    "LOST ITEM DETECTED: ID CARD",
-                    (30, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.0,
-                    (0, 0, 255),
-                    3,
-                )
-            else:
-                cv2.putText(
-                    frame,
-                    "Patrol scanning...",
-                    (30, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.0,
-                    (0, 255, 0),
-                    3,
-                )
+                if detected_this_frame:
+                    cv2.putText(
+                        frame,
+                        "ID CARD CANDIDATE IN VIEW",
+                        (30, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1.0,
+                        (0, 0, 255),
+                        3,
+                    )
+                else:
+                    cv2.putText(
+                        frame,
+                        "Patrol scanning...",
+                        (30, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1.0,
+                        (0, 255, 0),
+                        3,
+                    )
 
-            if args.show:
-                cv2.imshow("Night Patrol Lost Item Detection", frame)
+                if args.show:
+                    cv2.imshow("Night Patrol Lost Item Detection", frame)
 
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    print("Stopped by user.")
-                    break
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        print("Stopped by user.")
+                        break
+        except KeyboardInterrupt:
+            print("Stopped by user (Ctrl+C).")
     finally:
         cap.release()
         if args.show:
@@ -238,4 +305,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("Stopped by user (Ctrl+C).")
