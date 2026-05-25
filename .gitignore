@@ -1,0 +1,22 @@
+# macOS and editor artifacts
+.DS_Store
+
+# Python virtual env / cache
+.venv/
+__pycache__/
+*.pyc
+
+# Local inference outputs
+detections/
+runs/
+
+# Raw data assets and extracted frames
+videos/
+frames/
+
+# Dataset exports and archives
+ID Card Floor Detection.v1i.yolov8/
+ID Card Floor Detection.v1i.yolov8.zip
+
+# Model binaries (use Git LFS or external storage if needed)
+*.pt
