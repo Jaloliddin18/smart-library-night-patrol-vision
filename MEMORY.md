@@ -22,6 +22,27 @@ Completed work:
 - Empty-floor videos showed no false detections in baseline tests.
 - v2 fixed the known watch/random-object false positive on `IMG_1656.MOV`.
 - Patrol logger saves snapshots and appends structured records to `detections/detections.json`.
+- `patrol_id_card_logger.py` reliability improvements were added:
+  - `--conf` remains preview threshold.
+  - Added `--save-conf` (default `0.75`) for report save threshold.
+  - Added `--min-frames` (default `3`) for consecutive-frame validation.
+  - Save now requires all of:
+    1. class is `id_card`
+    2. confidence `>= save_conf`
+    3. at least `min_frames` consecutive detections
+    4. bounding box does not touch frame border within `5%` margin
+  - Snapshot save now uses the best-confidence frame from a valid detection streak.
+  - Default model path in logger is now `runs/detect/train-v2/weights/best.pt`.
+  - Ctrl+C now exits cleanly without large traceback.
+- Optional COCO bottle detection is now available behind `--enable-coco`:
+  - COCO model path/name: `yolov8n.pt`
+  - COCO preview threshold: `--coco-conf` (default `0.5`)
+  - COCO save threshold: `--coco-save-conf` (default `0.6`)
+  - COCO consecutive-frame rule: `--coco-min-frames` (default `3`)
+  - Bottle events use `priority: LOW`
+  - Bottle saves follow the same reliability gates (save-conf, min-frames, edge filter, best-frame snapshot).
+  - Live testing indicates bottle detection is workable when the bottle is upright and clearly visible.
+  - Lying-down bottles or unusual viewing angles are currently unreliable with the COCO pretrained baseline.
 
 ## 2. Important Architecture Decision
 - Phone mounted on TurtleBot is camera input.
@@ -32,17 +53,20 @@ Completed work:
 - Backend/admin review is for morning staff collection workflow.
 
 ## 3. Current Next Task
-1. Phone camera stream testing using OpenCV-compatible source URL.
-2. MQTT publishing for `LOST_ITEM_DETECTED` events after stream testing is stable.
+1. Implement MQTT `LOST_ITEM_DETECTED` publishing from `patrol_id_card_logger.py`.
 
 ## 4. Known Good Model Path
 - Current preferred model: `runs/detect/train-v2/weights/best.pt`
+- Main reliable detector remains the custom `id_card` model at `runs/detect/train-v2/weights/best.pt`.
+- COCO pretrained model used for bottle mode: `yolov8n.pt`
 - Keep `runs/detect/train-4/weights/best.pt` only as historical reference.
 
 ## 5. Known Good Test Results
-- v2 on random object (`IMG_1656.MOV`): no detection saved (false positive fixed).
-- v2 on ID-card video (`IMG_1640.MOV`): detection saved with confidence `0.9679`.
-- Snapshot saved during v2 ID-card test: `id_card_20260525_201604.jpg`.
+- Latest reliability test on random object/watch (`IMG_1656.MOV`): no detection saved.
+- Latest reliability test on ID-card video (`IMG_1640.MOV`): detection saved with confidence `0.9737`.
+- Snapshot saved during latest ID-card test: `id_card_20260525_214028.jpg`.
+- COCO-enabled run on `videos/random_object/IMG_1656.MOV` completed without crash using `yolov8n.pt`.
+- Live bottle testing: upright/clear bottles can be detected and logged, but lying/angled bottles are inconsistent.
 - Patrol logger currently outputs:
   - snapshots to `detections/snapshots/`
   - event logs to `detections/detections.json`
@@ -50,12 +74,16 @@ Completed work:
 ## 6. Known Good Test Commands
 ```bash
 source .venv/bin/activate
-python patrol_id_card_logger.py --model runs/detect/train-v2/weights/best.pt --source videos/random_object/IMG_1656.MOV --conf 0.5 --cooldown 30
-python patrol_id_card_logger.py --model runs/detect/train-v2/weights/best.pt --source videos/id_card/IMG_1640.MOV --conf 0.5 --cooldown 30
+python patrol_id_card_logger.py --model runs/detect/train-v2/weights/best.pt --source videos/random_object/IMG_1656.MOV --conf 0.5 --save-conf 0.75 --min-frames 3 --cooldown 30
+python patrol_id_card_logger.py --model runs/detect/train-v2/weights/best.pt --source videos/id_card/IMG_1640.MOV --conf 0.5 --save-conf 0.75 --min-frames 3 --cooldown 30
+python patrol_id_card_logger.py --model runs/detect/train-v2/weights/best.pt --source videos/random_object/IMG_1656.MOV --enable-coco --coco-classes bottle --coco-conf 0.5 --coco-save-conf 0.6 --coco-min-frames 3 --cooldown 30
 ```
 
 ## 7. Important Notes
 - Current purpose is night patrol lost-item logging, not delivery obstacle stopping.
-- Keep class count at one class for now: `id_card`.
+- Custom model class remains one class: `id_card` (plus optional COCO `bottle` behind `--enable-coco`).
+- Treat bottle detection as an optional baseline demo feature, not the main reliable detector.
+- Do not spend more time on custom bottle training unless explicitly requested.
 - Do not label the whole floor as `id_card`; keep bounding boxes tight around ID-card-like objects.
+- Edge-touching boxes (within 5% border margin) are preview-only and must not be saved as patrol reports.
 - Do not retrain, delete outputs, or add MQTT/backend integration unless explicitly requested.
