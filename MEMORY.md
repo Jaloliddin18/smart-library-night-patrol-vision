@@ -43,6 +43,22 @@ Completed work:
   - Bottle saves follow the same reliability gates (save-conf, min-frames, edge filter, best-frame snapshot).
   - Live testing indicates bottle detection is workable when the bottle is upright and clearly visible.
   - Lying-down bottles or unusual viewing angles are currently unreliable with the COCO pretrained baseline.
+- Night patrol pipeline class scope was expanded to:
+  - `id_card`
+  - `wallet`
+  - `phone`
+  - `bottle`
+  - `airpods`
+- Dataset class index config now targets:
+  - `0: id_card`
+  - `1: wallet`
+  - `2: phone`
+  - `3: bottle`
+  - `4: airpods`
+- MQTT payload mapping now uses backend enums while preserving lowercase model label:
+  - `objectType`: uppercase enum (example: `AIRPODS`)
+  - `detectedClass`: lowercase model label (example: `airpods`)
+  - `mode`: `NIGHT_PATROL`
 
 ## 2. Important Architecture Decision
 - Phone mounted on TurtleBot is camera input.
@@ -82,7 +98,13 @@ python patrol_id_card_logger.py --model runs/detect/train-v2/weights/best.pt --s
 
 ## 7. Important Notes
 - Current purpose is night patrol lost-item logging, not delivery obstacle stopping.
-- Custom model class remains one class: `id_card` (plus optional COCO `bottle` behind `--enable-coco`).
+- Custom model target classes are:
+  - `id_card`
+  - `wallet`
+  - `phone`
+  - `bottle`
+  - `airpods`
+- Optional COCO mode remains `bottle` behind `--enable-coco`.
 - Treat bottle detection as an optional baseline demo feature, not the main reliable detector.
 - Do not spend more time on custom bottle training unless explicitly requested.
 - Do not label the whole floor as `id_card`; keep bounding boxes tight around ID-card-like objects.
@@ -143,3 +165,24 @@ python patrol_id_card_logger.py --model runs/detect/train-v2/weights/best.pt --s
 - Phase 4: Python upload + MQTT publish
 - Next phase:
   - Phase 5: Admin frontend morning-review dashboard for lost item review.
+
+## 10. AirPods Rollout (2026-05-27)
+- `patrol_id_card_logger.py` was updated to detect all planned lost-item classes from custom model labels:
+  - `id_card`, `wallet`, `phone`, `bottle`, `airpods`
+- Backend mapping added:
+  - `id_card -> ID_CARD`
+  - `wallet -> WALLET`
+  - `phone -> PHONE`
+  - `bottle -> BOTTLE`
+  - `airpods -> AIRPODS`
+- MQTT payload now includes:
+  - `mode: NIGHT_PATROL`
+  - `detectedClass` (lowercase YOLO class)
+  - `objectType` (uppercase backend enum)
+- Compatibility behavior kept for unknown classes:
+  - no forced `UNKNOWN` conversion was introduced
+- Validation performed:
+  - `python -m py_compile patrol_id_card_logger.py` passed
+  - YAML class config load check passed (`nc=5` with ordered class names)
+  - Dry-run inference on `videos/id_card/IMG_1640.MOV` passed
+  - Current `runs/detect/train-v2/weights/best.pt` still reports only `id_card`, so logger warns missing classes until a new multi-class model is trained.

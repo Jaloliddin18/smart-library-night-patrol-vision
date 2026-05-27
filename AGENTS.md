@@ -16,8 +16,8 @@ This module is for **night patrol lost-item logging**, not delivery obstacle sto
 - Known good model path: `runs/detect/train-v2/weights/best.pt`
 - Model family: YOLOv8n (trained locally)
 - Current class scope:
-  - primary: `id_card` (custom model)
-  - optional demo mode: COCO `bottle` behind `--enable-coco`
+  - custom model targets: `id_card`, `wallet`, `phone`, `bottle`, `airpods`
+  - optional COCO fallback/demo mode: `bottle` behind `--enable-coco`
 - Validation was strong but dataset/validation size is limited, so do not over-trust score alone.
 
 ## 4. Python Environment
@@ -37,7 +37,12 @@ This module is for **night patrol lost-item logging**, not delivery obstacle sto
   - `videos/random_object/`
 
 ## 6. Current Behavior
-- Patrol logger reads a source (video/camera/stream), runs YOLO inference, and tracks `id_card`.
+- Patrol logger reads a source (video/camera/stream), runs YOLO inference, and tracks:
+  - `id_card`
+  - `wallet`
+  - `phone`
+  - `bottle`
+  - `airpods`
 - Optional COCO `bottle` tracking is available behind `--enable-coco`.
 - On allowed detection (cooldown satisfied), it:
   - saves a snapshot under `detections/snapshots/`
@@ -85,6 +90,41 @@ Detection records must remain compatible with this schema:
 }
 ```
 
+Notes:
+- Local `detections/detections.json` keeps YOLO class labels in lowercase (`objectType`).
+- MQTT/backend payloads must map `objectType` to uppercase enum values and preserve lowercase label as `detectedClass`.
+
+Backend enum mapping:
+
+```json
+{
+  "id_card": "ID_CARD",
+  "wallet": "WALLET",
+  "phone": "PHONE",
+  "bottle": "BOTTLE",
+  "airpods": "AIRPODS"
+}
+```
+
+Sample MQTT lost-item event:
+
+```json
+{
+  "robotId": "robot_01",
+  "mode": "NIGHT_PATROL",
+  "objectType": "AIRPODS",
+  "detectedClass": "airpods",
+  "confidence": 0.88,
+  "snapshotUrl": "uploads/lost-items/example-airpods.jpg",
+  "location": {
+    "floorId": "floor_1",
+    "x": 3.2,
+    "y": 4.8,
+    "theta": 90
+  }
+}
+```
+
 ## 9. Rules for Codex
 - Do not retrain unless explicitly asked.
 - Do not delete existing outputs unless explicitly asked.
@@ -107,3 +147,10 @@ Detection records must remain compatible with this schema:
 2. Add phone stream source testing using OpenCV-compatible URL input.
 3. Verify live MQTT publish path with broker/subscriber after installing `paho-mqtt`.
 4. Integrate with backend/admin review flow for morning staff operations.
+5. AirPods dataset collection guidance for training refresh:
+   - collect both AirPods case and AirPods images
+   - include white AirPods on bright floors/tables
+   - include AirPods case open and closed
+   - include multiple distances from TurtleBot camera angle
+   - include partial occlusion near chair/table/shelf
+   - avoid only clean close-up photos

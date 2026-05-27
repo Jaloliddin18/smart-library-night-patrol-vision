@@ -26,6 +26,14 @@ DEFAULT_MQTT_TOPIC = "robot/robot_01/lost-item"
 DEFAULT_ROBOT_ID = "robot_01"
 EDGE_MARGIN_RATIO = 0.05
 SUPPORTED_COCO_CLASSES = {"bottle"}
+MODEL_CLASS_ORDER = ["id_card", "wallet", "phone", "bottle", "airpods"]
+OBJECT_TYPE_TO_BACKEND_ENUM = {
+    "id_card": "ID_CARD",
+    "wallet": "WALLET",
+    "phone": "PHONE",
+    "bottle": "BOTTLE",
+    "airpods": "AIRPODS",
+}
 INSTALL_HINT = ".venv/bin/pip install requests paho-mqtt"
 UPLOAD_SNAPSHOT_MUTATION = """
 mutation UploadLostItemSnapshot($file: Upload!) {
@@ -41,9 +49,21 @@ OBJECT_EVENT_META = {
         "priority": "HIGH",
         "notes": "ID-card-like object detected on the floor during patrol scan.",
     },
+    "wallet": {
+        "priority": "HIGH",
+        "notes": "Wallet-like object detected on the floor during patrol scan.",
+    },
+    "phone": {
+        "priority": "HIGH",
+        "notes": "Phone-like object detected on the floor during patrol scan.",
+    },
     "bottle": {
         "priority": "LOW",
         "notes": "Bottle-like object detected on the floor during patrol scan.",
+    },
+    "airpods": {
+        "priority": "HIGH",
+        "notes": "AirPods-like object detected on the floor during patrol scan.",
     },
 }
 
@@ -52,16 +72,28 @@ OBJECT_COLORS = {
         "save_ready": (0, 255, 0),
         "preview_only": (0, 165, 255),
     },
+    "wallet": {
+        "save_ready": (0, 128, 255),
+        "preview_only": (0, 255, 255),
+    },
+    "phone": {
+        "save_ready": (255, 255, 0),
+        "preview_only": (255, 0, 255),
+    },
     "bottle": {
         "save_ready": (255, 0, 0),
-        "preview_only": (0, 255, 255),
+        "preview_only": (255, 128, 0),
+    },
+    "airpods": {
+        "save_ready": (128, 0, 255),
+        "preview_only": (255, 255, 255),
     },
 }
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Night patrol logger for ID-card-like lost-item detection."
+        description="Night patrol logger for lost-item detection."
     )
     parser.add_argument(
         "--source",
@@ -404,8 +436,16 @@ def init_mqtt_client(args) -> Tuple[Optional[Any], bool]:
 
 
 def build_mqtt_payload(record: Dict[str, Any], robot_id: str) -> Dict[str, Any]:
+    detected_class = str(record.get("objectType", "")).strip().lower()
+    backend_object_type = OBJECT_TYPE_TO_BACKEND_ENUM.get(
+        detected_class, str(record.get("objectType", ""))
+    )
+
     payload = dict(record)
     payload["robotId"] = robot_id
+    payload["mode"] = "NIGHT_PATROL"
+    payload["detectedClass"] = detected_class
+    payload["objectType"] = backend_object_type
     return payload
 
 
@@ -546,9 +586,39 @@ def main():
 
     model = YOLO(selected_model)
 
-    enabled_objects = ["id_card"]
-    save_conf_by_object = {"id_card": save_conf}
-    min_frames_by_object = {"id_card": min_frames}
+    model_class_names = model.names
+    if isinstance(model_class_names, dict):
+        available_model_classes = {
+            str(class_name).strip().lower()
+            for class_name in model_class_names.values()
+        }
+    else:
+        available_model_classes = {
+            str(class_name).strip().lower()
+            for class_name in model_class_names
+        }
+
+    model_target_classes = [
+        class_name for class_name in MODEL_CLASS_ORDER if class_name in available_model_classes
+    ]
+    missing_model_classes = [
+        class_name for class_name in MODEL_CLASS_ORDER if class_name not in available_model_classes
+    ]
+    if missing_model_classes:
+        print(
+            "WARNING: Custom model is missing expected classes: "
+            f"{', '.join(missing_model_classes)}"
+        )
+
+    if not model_target_classes:
+        raise RuntimeError(
+            "Custom model does not contain any supported lost-item classes. "
+            f"Expected at least one of: {', '.join(MODEL_CLASS_ORDER)}"
+        )
+
+    enabled_objects = list(model_target_classes)
+    save_conf_by_object = {class_name: save_conf for class_name in enabled_objects}
+    min_frames_by_object = {class_name: min_frames for class_name in enabled_objects}
     coco_model = None
     coco_target_classes: List[str] = []
 
@@ -578,9 +648,10 @@ def main():
             ) from exc
 
         for cls_name in coco_target_classes:
-            enabled_objects.append(cls_name)
-            save_conf_by_object[cls_name] = coco_save_conf
-            min_frames_by_object[cls_name] = coco_min_frames
+            if cls_name not in enabled_objects:
+                enabled_objects.append(cls_name)
+                save_conf_by_object[cls_name] = coco_save_conf
+                min_frames_by_object[cls_name] = coco_min_frames
 
     cap = cv2.VideoCapture(selected_source)
 
@@ -589,9 +660,10 @@ def main():
 
     last_saved_at = {object_type: 0.0 for object_type in enabled_objects}
 
-    print("Night patrol ID-card logger running.")
+    print("Night patrol lost-item logger running.")
     print(f"Source: {selected_source}")
     print(f"Model: {selected_model}")
+    print(f"Custom model target classes: {', '.join(model_target_classes)}")
     print(f"Preview confidence threshold (--conf): {preview_conf}")
     print(f"Save confidence threshold (--save-conf): {save_conf}")
     print(f"Minimum consecutive frames (--min-frames): {min_frames}")
@@ -643,17 +715,18 @@ def main():
                 frame_best_candidates: Dict[str, Tuple[float, Any]] = {}
 
                 for result in results:
-                    process_candidates_for_object(
-                        object_type="id_card",
-                        boxes=result.boxes,
-                        class_names=model.names,
-                        frame=frame,
-                        frame_w=frame_w,
-                        frame_h=frame_h,
-                        save_conf_threshold=save_conf_by_object["id_card"],
-                        frame_candidates=frame_candidates,
-                        frame_best_candidates=frame_best_candidates,
-                    )
+                    for object_type in model_target_classes:
+                        process_candidates_for_object(
+                            object_type=object_type,
+                            boxes=result.boxes,
+                            class_names=model.names,
+                            frame=frame,
+                            frame_w=frame_w,
+                            frame_h=frame_h,
+                            save_conf_threshold=save_conf_by_object[object_type],
+                            frame_candidates=frame_candidates,
+                            frame_best_candidates=frame_best_candidates,
+                        )
 
                 if coco_model is not None:
                     coco_results = coco_model.predict(frame, conf=coco_conf, verbose=False)

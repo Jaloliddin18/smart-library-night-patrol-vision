@@ -1,0 +1,18 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 5
+names:
+  0: id_card
+  1: wallet
+  2: phone
+  3: bottle
+  4: airpods
+
+roboflow:
+  workspace: davids-workspace-cucaq
+  project: id-card-floor-detection
+  version: 1
+  license: Private
+  url: https://app.roboflow.com/davids-workspace-cucaq/id-card-floor-detection/1
