@@ -13,6 +13,7 @@ names:
   2: phone
   3: bottle
   4: airpods
+  5: watch
 ```
 
 ## Backend Enum Mapping
@@ -25,7 +26,8 @@ YOLO class labels remain lowercase. MQTT/backend `objectType` must use uppercase
   "wallet": "WALLET",
   "phone": "PHONE",
   "bottle": "BOTTLE",
-  "airpods": "AIRPODS"
+  "airpods": "AIRPODS",
+  "watch": "WATCH"
 }
 ```
 
@@ -35,10 +37,10 @@ YOLO class labels remain lowercase. MQTT/backend `objectType` must use uppercase
 {
   "robotId": "robot_01",
   "mode": "NIGHT_PATROL",
-  "objectType": "AIRPODS",
-  "detectedClass": "airpods",
-  "confidence": 0.88,
-  "snapshotUrl": "uploads/lost-items/example-airpods.jpg",
+  "objectType": "WATCH",
+  "detectedClass": "watch",
+  "confidence": 0.86,
+  "snapshotUrl": "uploads/lost-items/example-watch.jpg",
   "location": {
     "floorId": "floor_1",
     "x": 3.2,
@@ -48,7 +50,7 @@ YOLO class labels remain lowercase. MQTT/backend `objectType` must use uppercase
 }
 ```
 
-## Training Data Guidance (AirPods)
+## Training Data Guidance (AirPods + Watch)
 
 - Collect both AirPods case and individual AirPods examples.
 - Include white AirPods on bright floors/tables.
@@ -56,3 +58,8 @@ YOLO class labels remain lowercase. MQTT/backend `objectType` must use uppercase
 - Capture at different distances and angles from TurtleBot camera perspective.
 - Include partial occlusion near chair/table/shelf areas.
 - Avoid building the dataset from only clean close-up photos.
+- Include smartwatches and normal watches if both are intended.
+- Include black watches on dark floors/tables.
+- Include watches with straps open and closed.
+- Include side angles, top angles, and partial occlusion.
+- Include different distances from the TurtleBot camera angle.

@@ -49,12 +49,14 @@ Completed work:
   - `phone`
   - `bottle`
   - `airpods`
+  - `watch`
 - Dataset class index config now targets:
   - `0: id_card`
   - `1: wallet`
   - `2: phone`
   - `3: bottle`
   - `4: airpods`
+  - `5: watch`
 - MQTT payload mapping now uses backend enums while preserving lowercase model label:
   - `objectType`: uppercase enum (example: `AIRPODS`)
   - `detectedClass`: lowercase model label (example: `airpods`)
@@ -104,6 +106,7 @@ python patrol_id_card_logger.py --model runs/detect/train-v2/weights/best.pt --s
   - `phone`
   - `bottle`
   - `airpods`
+  - `watch`
 - Optional COCO mode remains `bottle` behind `--enable-coco`.
 - Treat bottle detection as an optional baseline demo feature, not the main reliable detector.
 - Do not spend more time on custom bottle training unless explicitly requested.
@@ -166,15 +169,16 @@ python patrol_id_card_logger.py --model runs/detect/train-v2/weights/best.pt --s
 - Next phase:
   - Phase 5: Admin frontend morning-review dashboard for lost item review.
 
-## 10. AirPods Rollout (2026-05-27)
+## 10. AirPods + Watch Rollout (2026-05-27)
 - `patrol_id_card_logger.py` was updated to detect all planned lost-item classes from custom model labels:
-  - `id_card`, `wallet`, `phone`, `bottle`, `airpods`
+  - `id_card`, `wallet`, `phone`, `bottle`, `airpods`, `watch`
 - Backend mapping added:
   - `id_card -> ID_CARD`
   - `wallet -> WALLET`
   - `phone -> PHONE`
   - `bottle -> BOTTLE`
   - `airpods -> AIRPODS`
+  - `watch -> WATCH`
 - MQTT payload now includes:
   - `mode: NIGHT_PATROL`
   - `detectedClass` (lowercase YOLO class)
@@ -183,6 +187,6 @@ python patrol_id_card_logger.py --model runs/detect/train-v2/weights/best.pt --s
   - no forced `UNKNOWN` conversion was introduced
 - Validation performed:
   - `python -m py_compile patrol_id_card_logger.py` passed
-  - YAML class config load check passed (`nc=5` with ordered class names)
+  - YAML class config load check passed (`nc=6` with ordered class names)
   - Dry-run inference on `videos/id_card/IMG_1640.MOV` passed
   - Current `runs/detect/train-v2/weights/best.pt` still reports only `id_card`, so logger warns missing classes until a new multi-class model is trained.

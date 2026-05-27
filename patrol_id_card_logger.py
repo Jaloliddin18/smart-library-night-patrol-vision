@@ -26,13 +26,14 @@ DEFAULT_MQTT_TOPIC = "robot/robot_01/lost-item"
 DEFAULT_ROBOT_ID = "robot_01"
 EDGE_MARGIN_RATIO = 0.05
 SUPPORTED_COCO_CLASSES = {"bottle"}
-MODEL_CLASS_ORDER = ["id_card", "wallet", "phone", "bottle", "airpods"]
+MODEL_CLASS_ORDER = ["id_card", "wallet", "phone", "bottle", "airpods", "watch"]
 OBJECT_TYPE_TO_BACKEND_ENUM = {
     "id_card": "ID_CARD",
     "wallet": "WALLET",
     "phone": "PHONE",
     "bottle": "BOTTLE",
     "airpods": "AIRPODS",
+    "watch": "WATCH",
 }
 INSTALL_HINT = ".venv/bin/pip install requests paho-mqtt"
 UPLOAD_SNAPSHOT_MUTATION = """
@@ -65,6 +66,10 @@ OBJECT_EVENT_META = {
         "priority": "HIGH",
         "notes": "AirPods-like object detected on the floor during patrol scan.",
     },
+    "watch": {
+        "priority": "HIGH",
+        "notes": "Watch-like object detected on the floor during patrol scan.",
+    },
 }
 
 OBJECT_COLORS = {
@@ -87,6 +92,10 @@ OBJECT_COLORS = {
     "airpods": {
         "save_ready": (128, 0, 255),
         "preview_only": (255, 255, 255),
+    },
+    "watch": {
+        "save_ready": (64, 64, 255),
+        "preview_only": (128, 255, 128),
     },
 }
 

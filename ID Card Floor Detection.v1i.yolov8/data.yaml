@@ -2,13 +2,14 @@ train: ../train/images
 val: ../valid/images
 test: ../test/images
 
-nc: 5
+nc: 6
 names:
   0: id_card
   1: wallet
   2: phone
   3: bottle
   4: airpods
+  5: watch
 
 roboflow:
   workspace: davids-workspace-cucaq

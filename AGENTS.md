@@ -16,7 +16,8 @@ This module is for **night patrol lost-item logging**, not delivery obstacle sto
 - Known good model path: `runs/detect/train-v2/weights/best.pt`
 - Model family: YOLOv8n (trained locally)
 - Current class scope:
-  - custom model targets: `id_card`, `wallet`, `phone`, `bottle`, `airpods`
+  - custom model targets: `id_card`, `wallet`, `phone`, `bottle`, `airpods`, `watch`
+  - class index order: `0:id_card`, `1:wallet`, `2:phone`, `3:bottle`, `4:airpods`, `5:watch`
   - optional COCO fallback/demo mode: `bottle` behind `--enable-coco`
 - Validation was strong but dataset/validation size is limited, so do not over-trust score alone.
 
@@ -43,6 +44,7 @@ This module is for **night patrol lost-item logging**, not delivery obstacle sto
   - `phone`
   - `bottle`
   - `airpods`
+  - `watch`
 - Optional COCO `bottle` tracking is available behind `--enable-coco`.
 - On allowed detection (cooldown satisfied), it:
   - saves a snapshot under `detections/snapshots/`
@@ -102,7 +104,8 @@ Backend enum mapping:
   "wallet": "WALLET",
   "phone": "PHONE",
   "bottle": "BOTTLE",
-  "airpods": "AIRPODS"
+  "airpods": "AIRPODS",
+  "watch": "WATCH"
 }
 ```
 
@@ -112,10 +115,10 @@ Sample MQTT lost-item event:
 {
   "robotId": "robot_01",
   "mode": "NIGHT_PATROL",
-  "objectType": "AIRPODS",
-  "detectedClass": "airpods",
-  "confidence": 0.88,
-  "snapshotUrl": "uploads/lost-items/example-airpods.jpg",
+  "objectType": "WATCH",
+  "detectedClass": "watch",
+  "confidence": 0.86,
+  "snapshotUrl": "uploads/lost-items/example-watch.jpg",
   "location": {
     "floorId": "floor_1",
     "x": 3.2,
@@ -147,10 +150,15 @@ Sample MQTT lost-item event:
 2. Add phone stream source testing using OpenCV-compatible URL input.
 3. Verify live MQTT publish path with broker/subscriber after installing `paho-mqtt`.
 4. Integrate with backend/admin review flow for morning staff operations.
-5. AirPods dataset collection guidance for training refresh:
+5. AirPods + watch dataset collection guidance for training refresh:
    - collect both AirPods case and AirPods images
    - include white AirPods on bright floors/tables
    - include AirPods case open and closed
    - include multiple distances from TurtleBot camera angle
    - include partial occlusion near chair/table/shelf
    - avoid only clean close-up photos
+   - include smartwatches and normal watches if both are intended
+   - include black watches on dark floors/tables
+   - include watches with straps open and closed
+   - include side angles, top angles, and partial occlusion
+   - include different distances from TurtleBot camera angle
