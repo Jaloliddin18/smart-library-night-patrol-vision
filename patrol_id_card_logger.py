@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 DEFAULT_SOURCE = "videos/id_card/IMG_1640.MOV"
-DEFAULT_MODEL_PATH = "runs/detect/train-v2/weights/best.pt"
+DEFAULT_MODEL_PATH = "runs/detect/gatigo-lost-items-v1/weights/best.pt"
 DEFAULT_CONF_THRESHOLD = 0.5
 DEFAULT_SAVE_CONF_THRESHOLD = 0.75
 DEFAULT_MIN_FRAMES = 3
@@ -26,14 +26,14 @@ DEFAULT_MQTT_TOPIC = "robot/robot_01/lost-item"
 DEFAULT_ROBOT_ID = "robot_01"
 EDGE_MARGIN_RATIO = 0.05
 SUPPORTED_COCO_CLASSES = {"bottle"}
-MODEL_CLASS_ORDER = ["id_card", "wallet", "phone", "bottle", "airpods", "watch"]
-OBJECT_TYPE_TO_BACKEND_ENUM = {
-    "id_card": "ID_CARD",
-    "wallet": "WALLET",
-    "phone": "PHONE",
-    "bottle": "BOTTLE",
-    "airpods": "AIRPODS",
-    "watch": "WATCH",
+CUSTOM_MODEL_CLASSES = ["id_card", "wallet", "phone", "watch", "airpods"]
+MQTT_OBJECT_TYPE_MAP = {
+    "id_card": "id_card",
+    "wallet": "wallet",
+    "phone": "phone",
+    "watch": "watch",
+    "airpods": "airpods",
+    "bottle": "bottle",
 }
 INSTALL_HINT = ".venv/bin/pip install requests paho-mqtt"
 UPLOAD_SNAPSHOT_MUTATION = """
@@ -63,11 +63,11 @@ OBJECT_EVENT_META = {
         "notes": "Bottle-like object detected on the floor during patrol scan.",
     },
     "airpods": {
-        "priority": "HIGH",
+        "priority": "MEDIUM",
         "notes": "AirPods-like object detected on the floor during patrol scan.",
     },
     "watch": {
-        "priority": "HIGH",
+        "priority": "MEDIUM",
         "notes": "Watch-like object detected on the floor during patrol scan.",
     },
 }
@@ -446,15 +446,15 @@ def init_mqtt_client(args) -> Tuple[Optional[Any], bool]:
 
 def build_mqtt_payload(record: Dict[str, Any], robot_id: str) -> Dict[str, Any]:
     detected_class = str(record.get("objectType", "")).strip().lower()
-    backend_object_type = OBJECT_TYPE_TO_BACKEND_ENUM.get(
-        detected_class, str(record.get("objectType", ""))
+    payload_object_type = MQTT_OBJECT_TYPE_MAP.get(
+        detected_class, detected_class or str(record.get("objectType", ""))
     )
 
     payload = dict(record)
     payload["robotId"] = robot_id
     payload["mode"] = "NIGHT_PATROL"
     payload["detectedClass"] = detected_class
-    payload["objectType"] = backend_object_type
+    payload["objectType"] = payload_object_type
     return payload
 
 
@@ -608,10 +608,14 @@ def main():
         }
 
     model_target_classes = [
-        class_name for class_name in MODEL_CLASS_ORDER if class_name in available_model_classes
+        class_name
+        for class_name in CUSTOM_MODEL_CLASSES
+        if class_name in available_model_classes
     ]
     missing_model_classes = [
-        class_name for class_name in MODEL_CLASS_ORDER if class_name not in available_model_classes
+        class_name
+        for class_name in CUSTOM_MODEL_CLASSES
+        if class_name not in available_model_classes
     ]
     if missing_model_classes:
         print(
@@ -622,7 +626,7 @@ def main():
     if not model_target_classes:
         raise RuntimeError(
             "Custom model does not contain any supported lost-item classes. "
-            f"Expected at least one of: {', '.join(MODEL_CLASS_ORDER)}"
+            f"Expected at least one of: {', '.join(CUSTOM_MODEL_CLASSES)}"
         )
 
     enabled_objects = list(model_target_classes)

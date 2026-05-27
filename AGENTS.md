@@ -2,7 +2,7 @@
 
 ## 1. Project Purpose
 This repository is the **같이Go Night Patrol Vision Module** for Smart Library lost-item detection.
-Primary goal: during night patrol, detect `id_card`-like objects on the floor, log structured events, and preserve snapshots for morning staff review.
+Primary goal: during night patrol, detect lost-item objects on the floor, log structured events, and preserve snapshots for morning staff review.
 This module is for **night patrol lost-item logging**, not delivery obstacle stopping.
 
 ## 2. Architecture
@@ -13,11 +13,11 @@ This module is for **night patrol lost-item logging**, not delivery obstacle sto
 - Backend/admin flow (later): staff review and collection priority.
 
 ## 3. Current Model
-- Known good model path: `runs/detect/train-v2/weights/best.pt`
-- Model family: YOLOv8n (trained locally)
+- Known good model path: `runs/detect/gatigo-lost-items-v1/weights/best.pt`
+- Model family: YOLOv8n fine-tuned from COCO-pretrained `yolov8n.pt` (Colab training)
 - Current class scope:
-  - custom model targets: `id_card`, `wallet`, `phone`, `bottle`, `airpods`, `watch`
-  - class index order: `0:id_card`, `1:wallet`, `2:phone`, `3:bottle`, `4:airpods`, `5:watch`
+  - custom model targets from `data.yaml`: `airpods`, `id_card`, `phone`, `wallet`, `watch`
+  - logger supports custom classes: `id_card`, `wallet`, `phone`, `watch`, `airpods`
   - optional COCO fallback/demo mode: `bottle` behind `--enable-coco`
 - Validation was strong but dataset/validation size is limited, so do not over-trust score alone.
 
@@ -29,44 +29,54 @@ This module is for **night patrol lost-item logging**, not delivery obstacle sto
 
 ## 5. Important Files
 - Main script: `patrol_id_card_logger.py`
-- Trained model: `runs/detect/train-v2/weights/best.pt`
+- Trained model: `runs/detect/gatigo-lost-items-v1/weights/best.pt`
 - Detection records: `detections/detections.json`
 - Detection snapshots: `detections/snapshots/`
 - Test videos:
+  - `videos/lost_items/watch/`
+  - `videos/lost_items/phone/`
+  - `videos/lost_items/wallet/`
+  - `videos/lost_items/airpods/`
   - `videos/id_card/`
-  - `videos/empty_floor/`
-  - `videos/random_object/`
+  - `videos/lost_items/negative/`
 
 ## 6. Current Behavior
 - Patrol logger reads a source (video/camera/stream), runs YOLO inference, and tracks:
   - `id_card`
   - `wallet`
   - `phone`
-  - `bottle`
-  - `airpods`
   - `watch`
+  - `airpods`
 - Optional COCO `bottle` tracking is available behind `--enable-coco`.
 - On allowed detection (cooldown satisfied), it:
   - saves a snapshot under `detections/snapshots/`
   - appends a structured event to `detections/detections.json`
+- Save gating uses:
+  - preview threshold: `--conf`
+  - save threshold: `--save-conf`
+  - consecutive-frame threshold: `--min-frames`
+  - edge rejection
+  - cooldown
+- Cooldown and streak tracking are per object type (not global).
 - Optional MQTT publish (only when `--mqtt` is enabled):
   - publishes the same saved event to configured topic
   - publish happens only after local save succeeds
   - MQTT failures must not crash local logging
-- Cooldown reduces duplicate spam.
-- Local testing baseline:
-  - ID-card videos should detect.
-  - Empty/random floor scenes should ideally have no false detections.
 
 ## 7. Testing Commands
 Run from repo root after `source .venv/bin/activate`:
 
 ```bash
-python patrol_id_card_logger.py --source videos/id_card/IMG_1640.MOV
-python patrol_id_card_logger.py --source videos/empty_floor/IMG_1648.MOV
-ls videos/random_object
-python patrol_id_card_logger.py --source videos/random_object/<filename>.MOV
-python patrol_id_card_logger.py --source videos/id_card/IMG_1640.MOV --mqtt --mqtt-host localhost --mqtt-port 1883 --mqtt-topic robot/robot_01/lost-item --robot-id robot_01
+python -m py_compile patrol_id_card_logger.py
+python patrol_id_card_logger.py --help
+
+python patrol_id_card_logger.py --model runs/detect/gatigo-lost-items-v1/weights/best.pt --source videos/lost_items/watch/IMG_1671.MOV --conf 0.5 --save-conf 0.7 --min-frames 3
+python patrol_id_card_logger.py --model runs/detect/gatigo-lost-items-v1/weights/best.pt --source videos/lost_items/phone/IMG_1679.MOV --conf 0.5 --save-conf 0.7 --min-frames 3
+python patrol_id_card_logger.py --model runs/detect/gatigo-lost-items-v1/weights/best.pt --source videos/lost_items/wallet/IMG_1675.MOV --conf 0.5 --save-conf 0.7 --min-frames 3
+python patrol_id_card_logger.py --model runs/detect/gatigo-lost-items-v1/weights/best.pt --source videos/lost_items/airpods/IMG_1668.MOV --conf 0.5 --save-conf 0.7 --min-frames 3
+python patrol_id_card_logger.py --model runs/detect/gatigo-lost-items-v1/weights/best.pt --source videos/id_card/IMG_1640.MOV --conf 0.5 --save-conf 0.7 --min-frames 3
+
+python patrol_id_card_logger.py --model runs/detect/gatigo-lost-items-v1/weights/best.pt --source videos/lost_items/watch/IMG_1671.MOV --upload-snapshot --backend-url http://localhost:3007/graphql --admin-token-file admin_jwt.txt --mqtt --mqtt-host localhost --mqtt-port 1883 --mqtt-topic robot/robot_01/lost-item --robot-id robot_01 --conf 0.5 --save-conf 0.7 --min-frames 3
 ```
 
 ## 8. Event Record Shape
@@ -94,20 +104,9 @@ Detection records must remain compatible with this schema:
 
 Notes:
 - Local `detections/detections.json` keeps YOLO class labels in lowercase (`objectType`).
-- MQTT/backend payloads must map `objectType` to uppercase enum values and preserve lowercase label as `detectedClass`.
-
-Backend enum mapping:
-
-```json
-{
-  "id_card": "ID_CARD",
-  "wallet": "WALLET",
-  "phone": "PHONE",
-  "bottle": "BOTTLE",
-  "airpods": "AIRPODS",
-  "watch": "WATCH"
-}
-```
+- MQTT payload keeps `objectType` in lowercase class form:
+  - `id_card`, `wallet`, `phone`, `watch`, `airpods` (and `bottle` when COCO mode is used)
+- MQTT payload also includes lowercase `detectedClass`.
 
 Sample MQTT lost-item event:
 
@@ -115,7 +114,7 @@ Sample MQTT lost-item event:
 {
   "robotId": "robot_01",
   "mode": "NIGHT_PATROL",
-  "objectType": "WATCH",
+  "objectType": "watch",
   "detectedClass": "watch",
   "confidence": 0.86,
   "snapshotUrl": "uploads/lost-items/example-watch.jpg",
@@ -140,17 +139,11 @@ Sample MQTT lost-item event:
 - Avoid noisy per-frame logs.
 
 ## 10. Future Roadmap
-1. Refactor `patrol_id_card_logger.py` CLI interface:
-   - `--source`
-   - `--model`
-   - `--conf`
-   - `--cooldown`
-   - `--output-dir`
-   - optional display flag
-2. Add phone stream source testing using OpenCV-compatible URL input.
-3. Verify live MQTT publish path with broker/subscriber after installing `paho-mqtt`.
+1. Verify live upload + MQTT path against running localhost backend (`:3007`) and broker (`:1883`) outside sandbox constraints.
+2. Add repeatable regression command set for all five custom classes plus negative scenes.
+3. Add phone stream source testing using OpenCV-compatible URL input.
 4. Integrate with backend/admin review flow for morning staff operations.
-5. AirPods + watch dataset collection guidance for training refresh:
+5. AirPods + watch dataset collection guidance for future training refresh:
    - collect both AirPods case and AirPods images
    - include white AirPods on bright floors/tables
    - include AirPods case open and closed
